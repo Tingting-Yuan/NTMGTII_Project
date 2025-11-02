@@ -1,5 +1,5 @@
 # Networking Technologies and Management Systems II  
-### Programming Project (WS 2024/25)
+### Programming Project (WS 2025/26)
 
 ---
 
