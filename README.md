@@ -1,52 +1,89 @@
-# Dijkstra Shortest Path Algorithm
-
-## Project Overview
-
-This project provides a complete Python implementation of **Dijkstra’s algorithm** for finding the shortest path in a weighted graph. The implementation is encapsulated in `dijkstra.py` and supports:
-
-- Adding vertices and their edges with weights.
-- Computing the shortest path between two nodes.
-- Handling cases where nodes are not in the graph or are disconnected.
-- Returning the **full path** as a list of nodes.
-
-This implementation is suitable for educational purposes, demonstrations, or as a foundation for larger graph/network projects.
+# Networking Technologies and Management Systems II  
+### Programming Project (WS 2024/25)
 
 ---
 
-## Features
+## 🧩 Project Overview
 
-- **Dynamic graph creation**: Add any number of vertices and edges.  
-- **Shortest path calculation**: Computes forward paths using Dijkstra’s algorithm.  
-- **Edge cases handled**:  
-  - Path to self (`A → A`)  
-  - Nonexistent nodes return `None`  
-  - Disconnected nodes return `None`  
-- **Readable output**: Returns the shortest path as a list of node names.
+In order to put the concepts learned in the course into practice, the programming project aims at implementing **a simple messaging protocol for chat applications built on top of UDP**.
+
+This protocol — called **Simple IMC Messaging Protocol (SIMP)** — could in theory be used by a third-party to implement a chat program at the application layer level.
 
 ---
 
-## Files
+## 📜 SIMP Specification
 
-| File | Description |
-|------|-------------|
-| `dijkstra.py` | Main implementation of Dijkstra’s algorithm with `Graph` class. |
-| `test.py` | Unit tests for multiple graphs and edge cases using `unittest`. (Don't change.)|
+### 1. Protocol Concept
+
+SIMP is a **lightweight protocol** implemented over UDP.  
+While UDP does not provide reliable delivery, SIMP adds minimal mechanisms to ensure message delivery, using connection setup and acknowledgment logic.
+
+Users are identified by **IP address and port number**.  
+Each user must run a SIMP daemon to participate in chats.
+
+- A user can **start or receive** a chat request.  
+- If a user is already chatting, new invitations will be **automatically rejected** with an error message (`ERR: user busy`).
+
+Once a chat is accepted, both users can exchange messages until one side closes the connection.
 
 ---
 
-## Usage
+### 2. Datagram Types
 
-```python
-from dijkstras import Graph
+| Datagram Type | Description | Type Value |
+|----------------|--------------|-------------|
+| **Control datagram** | Used to establish, terminate, or retransmit data after timeout | `0x01` |
+| **Chat datagram** | Used for the actual chat content between users | `0x02` |
 
-# Create a graph
-g = Graph()
-g.add_vertex('A', {'B': 7, 'C': 8})
-g.add_vertex('B', {'A': 7, 'F': 2})
-g.add_vertex('C', {'A': 8, 'F': 6, 'G': 4})
-g.add_vertex('F', {'B': 2, 'C': 6})
-g.add_vertex('G', {'C': 4})
+---
 
-# Compute shortest path
-path = g.shortest_path('A', 'G')
-print(path)  # Output: ['A', 'C', 'G']
+### 3. Header Format
+
+Each SIMP datagram consists of a **header** and a **payload**.  
+All text is encoded using **plain ASCII**.
+
+| Field | Size | Description |
+|--------|------|-------------|
+| **Type** | 1 byte | `0x01` = control datagram; `0x02` = chat datagram |
+| **Operation** | 1 byte | Depends on Type |
+| **Sequence** | 1 byte | Sequence number (`0x00` or `0x01`) |
+| **User** | 32 bytes | Username (ASCII string) |
+| **Length** | 4 bytes | Payload length in bytes |
+| **Payload** | Variable | Content depending on the type and operation |
+
+#### Operation Values
+
+If `Type == 0x01` (Control):
+- `0x01` → `ERR` (error)
+- `0x02` → `SYN` (start connection)
+- `0x04` → `ACK` (acknowledge)
+- `0x08` → `FIN` (close connection)
+
+If `Type == 0x02` (Chat):
+- `Operation = 0x01`
+
+---
+
+### 4. Protocol Operation
+
+#### Connection Establishment (Three-way Handshake)
+
+1. **Sender → Receiver:** send `SYN`
+2. **Receiver → Sender:** reply `SYN + ACK` (bitwise OR)
+3. **Sender → Receiver:** reply `ACK`
+
+If the receiver declines, step 2 is replaced by a `FIN` message.
+
+#### Message Exchange (Stop-and-Wait)
+
+After connection setup:
+- The sender transmits a **chat datagram**.
+- Waits for **ACK** before sending the next datagram.
+- If no ACK is received within 5 seconds → retransmit same datagram (same sequence number).
+- Next message toggles sequence number (`0` ↔ `1`).
+
+If a user is already chatting and receives a new `SYN`:
+- Send an `ERR` (“User already in another chat”) and a `FIN`.
+
+To end a chat:
+- Send `FIN`; peer replies with `ACK
