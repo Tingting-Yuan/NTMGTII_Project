@@ -1,146 +1,90 @@
 #!/usr/bin/env python3
 
+import socket
 import struct
-from enum import IntEnum
-from dataclasses import dataclass
-from typing import Optional
+from enum import Enum
 
-# Protocol Constants
+# Constants
+MESSAGE_TYPE_SIZE = 1
+OPERATION_SIZE = 1
+SEQ_SIZE = 1
+USERNAME_SIZE = 32
+PAYLOAD_SIZE = 4
+HEADER_SIZE = MESSAGE_TYPE_SIZE + OPERATION_SIZE + SEQ_SIZE + USERNAME_SIZE + PAYLOAD_SIZE
+
 DAEMON_PORT = 7777
-CLIENT_PORT = 7778
+CLIENT_DAEMON_PORT = 7778
 TIMEOUT = 5.0
-MAX_USERNAME_LEN = 32
-HEADER_SIZE = 38  # 1 + 1 + 1 + 32 + 4 + (payload variable)
 
-class DatagramType(IntEnum):
+
+class MessageType(Enum):
     CONTROL = 0x01
     CHAT = 0x02
 
-class ControlOp(IntEnum):
+
+class OperationType(Enum):
     ERR = 0x01
     SYN = 0x02
     ACK = 0x04
     FIN = 0x08
-    SYN_ACK = 0x06  # SYN | ACK
-
-class ChatOp(IntEnum):
-    MESSAGE = 0x01
-
-@dataclass
-class SIMPHeader:
-    """SIMP Protocol Header"""
-    type: int
-    operation: int
-    sequence: int
-    user: str
-    length: int
-    
-    def pack(self) -> bytes:
-        """Pack header into bytes"""
-        # Pad username to 32 bytes
-        user_bytes = self.user.encode('ascii')[:MAX_USERNAME_LEN]
-        user_padded = user_bytes.ljust(MAX_USERNAME_LEN, b'\x00')
-        
-        return struct.pack('!BBB32sI', 
-                          self.type, 
-                          self.operation, 
-                          self.sequence,
-                          user_padded,
-                          self.length)
-    
-    @staticmethod
-    def unpack(data: bytes) -> 'SIMPHeader':
-        """Unpack header from bytes"""
-        type_val, op, seq, user_bytes, length = struct.unpack('!BBB32sI', data[:HEADER_SIZE])
-        # Remove null padding from username
-        user = user_bytes.rstrip(b'\x00').decode('ascii')
-        return SIMPHeader(type_val, op, seq, user, length)
-
-@dataclass
-class SIMPDatagram:
-    """Complete SIMP Datagram"""
-    header: SIMPHeader
-    payload: bytes
-    
-    def pack(self) -> bytes:
-        """Pack entire datagram"""
-        return self.header.pack() + self.payload
-    
-    @staticmethod
-    def unpack(data: bytes) -> 'SIMPDatagram':
-        """Unpack entire datagram"""
-        header = SIMPHeader.unpack(data[:HEADER_SIZE])
-        payload = data[HEADER_SIZE:HEADER_SIZE + header.length]
-        return SIMPDatagram(header, payload)
-    
-    @staticmethod
-    def create_control(operation: int, sequence: int, username: str, payload: str = "") -> 'SIMPDatagram':
-        """Create a control datagram"""
-        payload_bytes = payload.encode('ascii')
-        header = SIMPHeader(
-            type=DatagramType.CONTROL,
-            operation=operation,
-            sequence=sequence,
-            user=username,
-            length=len(payload_bytes)
-        )
-        return SIMPDatagram(header, payload_bytes)
-    
-    @staticmethod
-    def create_chat(sequence: int, username: str, message: str) -> 'SIMPDatagram':
-        """Create a chat datagram"""
-        payload_bytes = message.encode('ascii')
-        header = SIMPHeader(
-            type=DatagramType.CHAT,
-            operation=ChatOp.MESSAGE,
-            sequence=sequence,
-            user=username,
-            length=len(payload_bytes)
-        )
-        return SIMPDatagram(header, payload_bytes)
-    
-    def get_payload_str(self) -> str:
-        """Get payload as string"""
-        return self.payload.decode('ascii')
-
-# Internal Client-Daemon Protocol
-class ClientCommand(IntEnum):
-    CONNECT = 0x01
-    CHAT = 0x02
-    QUIT = 0x03
-    ACCEPT = 0x04
-    DECLINE = 0x05
-    START_CHAT = 0x06
-    WAIT = 0x07
-
-class DaemonResponse(IntEnum):
-    OK = 0x01
-    ERROR = 0x02
-    INVITATION = 0x03
-    MESSAGE = 0x04
-    CHAT_ENDED = 0x05
-    CHAT_ESTABLISHED = 0x06
-
-@dataclass
-class ClientDaemonMessage:
-    """Message between client and daemon"""
-    command: int
-    data: str = ""
-    
-    def pack(self) -> bytes:
-        """Pack into bytes"""
-        data_bytes = self.data.encode('ascii')
-        return struct.pack('!BI', self.command, len(data_bytes)) + data_bytes
-    
-    @staticmethod
-    def unpack(data: bytes) -> 'ClientDaemonMessage':
-        """Unpack from bytes"""
-        command, length = struct.unpack('!BI', data[:5])
-        payload = data[5:5+length].decode('ascii')
-        return ClientDaemonMessage(command, payload)
+    CHAT_MSG = 0x01  # For chat messages
 
 
-def input_message():
-    print('Please enter message to send: ')
-    message_to_send = input()
-    return message_to_send
+def build_simp_message(msg_type: MessageType, operation: int, seq: int, username: str, payload: str = "") -> bytes:
+    """Build a SIMP protocol message."""
+    type_byte = msg_type.value.to_bytes(1, byteorder='big')
+    op_byte = operation.to_bytes(1, byteorder='big')
+    seq_byte = seq.to_bytes(1, byteorder='big')
+    
+    # Pad username to 32 bytes
+    username_bytes = username[:32].ljust(32).encode('ascii')
+    
+    # Encode payload
+    payload_bytes = payload.encode('ascii')
+    payload_len = len(payload_bytes).to_bytes(4, byteorder='big')
+    
+    return type_byte + op_byte + seq_byte + username_bytes + payload_len + payload_bytes
+
+
+def parse_simp_message(data: bytes) -> dict:
+    """Parse a SIMP protocol message."""
+    if len(data) < HEADER_SIZE:
+        raise ValueError("Message too short")
+    
+    msg_type = data[0]
+    operation = data[1]
+    seq = data[2]
+    username = data[3:35].decode('ascii').strip()
+    payload_len = int.from_bytes(data[35:39], byteorder='big')
+    
+    if len(data) < HEADER_SIZE + payload_len:
+        raise ValueError("Incomplete payload")
+    
+    payload = data[39:39+payload_len].decode('ascii')
+    
+    return {
+        'type': msg_type,
+        'operation': operation,
+        'seq': seq,
+        'username': username,
+        'payload': payload
+    }
+
+
+def build_client_daemon_message(cmd: str, **kwargs) -> str:
+    """Build internal client-daemon protocol message."""
+    parts = [cmd]
+    for key, value in kwargs.items():
+        parts.append(f"{key}={value}")
+    return "|".join(parts)
+
+
+def parse_client_daemon_message(msg: str) -> dict:
+    """Parse internal client-daemon protocol message."""
+    parts = msg.split("|")
+    result = {'command': parts[0]}
+    for part in parts[1:]:
+        if '=' in part:
+            key, value = part.split('=', 1)
+            result[key] = value
+    return result
