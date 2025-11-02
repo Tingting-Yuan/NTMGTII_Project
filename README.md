@@ -169,12 +169,11 @@ Include concise documentation describing your implementation and design.
 
 | Criteria | Points |
 |-----------|--------|
-| Correct message implementation (header + payload) | 15 |
+| Correct message implementation (header + payload) | 10 |
 | Correct three-way handshake | 10 |
 | Correct stop-and-wait | 10 |
 | Correct daemon–client communication | 10 |
-| Clean code & documentation | 5 |
-| **Total** | **50 Points** |
+| **Total** | **40 Points** |
 
 ---
 
