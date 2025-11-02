@@ -1,245 +1,143 @@
 #!/usr/bin/env python3
 
-import socket
 import struct
-from enum import Enum
-import string
+from enum import IntEnum
+from dataclasses import dataclass
+from typing import Optional
 
-MESSAGE_TYPE_SIZE = 1
-OPERATION_SIZE = 1
-SEQ_SIZE = 1
-USERNAME_SIZE = 32
-PAYLOAD_SIZE = 4
-MAX_HEADER_SIZE = MESSAGE_TYPE_SIZE + OPERATION_SIZE + SEQ_SIZE + USERNAME_SIZE + PAYLOAD_SIZE
+# Protocol Constants
+DAEMON_PORT = 7777
+CLIENT_PORT = 7778
+TIMEOUT = 5.0
+MAX_USERNAME_LEN = 32
+HEADER_SIZE = 38  # 1 + 1 + 1 + 32 + 4 + (payload variable)
 
-username = 'default'
+class DatagramType(IntEnum):
+    CONTROL = 0x01
+    CHAT = 0x02
 
+class ControlOp(IntEnum):
+    ERR = 0x01
+    SYN = 0x02
+    ACK = 0x04
+    FIN = 0x08
+    SYN_ACK = 0x06  # SYN | ACK
 
-class MessageType(Enum):
-    UNKNOWN = 0
-    CHAT = 1,
-    CONTROL = 2
+class ChatOp(IntEnum):
+    MESSAGE = 0x01
 
-    def to_bytes(self):
-        if self == MessageType.UNKNOWN:
-            return int(0).to_bytes(1, byteorder='big')
-        elif self == MessageType.CHAT:
-            return int(1).to_bytes(1, byteorder='big')
-        elif self == MessageType.CONTROL:
-            return int(2).to_bytes(1, byteorder='big')
-
+@dataclass
+class SIMPHeader:
+    """SIMP Protocol Header"""
+    type: int
+    operation: int
+    sequence: int
+    user: str
+    length: int
+    
+    def pack(self) -> bytes:
+        """Pack header into bytes"""
+        # Pad username to 32 bytes
+        user_bytes = self.user.encode('ascii')[:MAX_USERNAME_LEN]
+        user_padded = user_bytes.ljust(MAX_USERNAME_LEN, b'\x00')
+        
+        return struct.pack('!BBB32sI', 
+                          self.type, 
+                          self.operation, 
+                          self.sequence,
+                          user_padded,
+                          self.length)
+    
     @staticmethod
-    def to_message_type(type_byte):
-        if type_byte == 1:
-            return MessageType.CHAT
-        elif type_byte == 2:
-            return MessageType.CONTROL
-        return MessageType.UNKNOWN
+    def unpack(data: bytes) -> 'SIMPHeader':
+        """Unpack header from bytes"""
+        type_val, op, seq, user_bytes, length = struct.unpack('!BBB32sI', data[:HEADER_SIZE])
+        # Remove null padding from username
+        user = user_bytes.rstrip(b'\x00').decode('ascii')
+        return SIMPHeader(type_val, op, seq, user, length)
 
+@dataclass
+class SIMPDatagram:
+    """Complete SIMP Datagram"""
+    header: SIMPHeader
+    payload: bytes
+    
+    def pack(self) -> bytes:
+        """Pack entire datagram"""
+        return self.header.pack() + self.payload
+    
+    @staticmethod
+    def unpack(data: bytes) -> 'SIMPDatagram':
+        """Unpack entire datagram"""
+        header = SIMPHeader.unpack(data[:HEADER_SIZE])
+        payload = data[HEADER_SIZE:HEADER_SIZE + header.length]
+        return SIMPDatagram(header, payload)
+    
+    @staticmethod
+    def create_control(operation: int, sequence: int, username: str, payload: str = "") -> 'SIMPDatagram':
+        """Create a control datagram"""
+        payload_bytes = payload.encode('ascii')
+        header = SIMPHeader(
+            type=DatagramType.CONTROL,
+            operation=operation,
+            sequence=sequence,
+            user=username,
+            length=len(payload_bytes)
+        )
+        return SIMPDatagram(header, payload_bytes)
+    
+    @staticmethod
+    def create_chat(sequence: int, username: str, message: str) -> 'SIMPDatagram':
+        """Create a chat datagram"""
+        payload_bytes = message.encode('ascii')
+        header = SIMPHeader(
+            type=DatagramType.CHAT,
+            operation=ChatOp.MESSAGE,
+            sequence=sequence,
+            user=username,
+            length=len(payload_bytes)
+        )
+        return SIMPDatagram(header, payload_bytes)
+    
+    def get_payload_str(self) -> str:
+        """Get payload as string"""
+        return self.payload.decode('ascii')
 
-class OperationType(Enum):
-    NO_OPERATION = 0
-    ERROR = 1,
-    SYN = 2,
-    ACK = 3,
-    FIN = 4
+# Internal Client-Daemon Protocol
+class ClientCommand(IntEnum):
+    CONNECT = 0x01
+    CHAT = 0x02
+    QUIT = 0x03
+    ACCEPT = 0x04
+    DECLINE = 0x05
+    START_CHAT = 0x06
+    WAIT = 0x07
 
-    def to_bytes(self):
-        if self == OperationType.NO_OPERATION:
-            return int(0).to_bytes(1, byteorder='big')
-        elif self == OperationType.ERROR:
-            return int(1).to_bytes(1, byteorder='big')
-        elif self == OperationType.SYN:
-            return int(2).to_bytes(1, byteorder='big')
-        elif self == OperationType.ACK:
-            return int(4).to_bytes(1, byteorder='big')
-        elif self == OperationType.FIN:
-            return int(8).to_bytes(1, byteorder='big')
+class DaemonResponse(IntEnum):
+    OK = 0x01
+    ERROR = 0x02
+    INVITATION = 0x03
+    MESSAGE = 0x04
+    CHAT_ENDED = 0x05
+    CHAT_ESTABLISHED = 0x06
 
-
-class ErrorCode(Enum):
-    OK = 0,
-    MESSAGE_TOO_SHORT = 1
-    UNKNOWN_MESSAGE = 2
-    WRONG_PAYLOAD = 3
-
-
-class HeaderInfo:
-    is_ok = False
-    type: MessageType
-    operation: OperationType
-    code: ErrorCode
-    seq: int
-    user: string
-
-    def __init__(self):
-        self.is_ok = False
-        self.type = MessageType.UNKNOWN
-        self.code = ErrorCode.OK
-        self.operation = OperationType.NO_OPERATION
-        self.seq = 0
-        self.user = ''
-
-
-class SimpConnectionState:
-    address: string
-    port: int
-
-
-def get_message_type(message: bytes) -> MessageType:
-    """
-    Extracts the message type from the message
-    :param message: The received message
-    :return: The message type
-    """
-    type_byte = message[0]
-    if type_byte == 1:
-        return MessageType.CHAT
-    elif type_byte == 2:
-        return MessageType.CONTROL
-    return MessageType.UNKNOWN
-
-
-def get_payload_size(message: bytes):
-    """
-    Returns the declared payload size from the message
-    :param message: The received message
-    :return: The payload size in bytes
-    """
-    start_payload_size = MESSAGE_TYPE_SIZE + OPERATION_SIZE + SEQ_SIZE + USERNAME_SIZE
-    payload_size = message[start_payload_size:start_payload_size+MAX_HEADER_SIZE]
-    return int.from_bytes(payload_size, byteorder='big')
-
-
-def get_user(message: bytes):
-    """
-    Returns the username specified in the header
-    :param message: The received message
-    :return: The username as a string
-    """
-    start_username = MESSAGE_TYPE_SIZE + OPERATION_SIZE + SEQ_SIZE
-    username = message[start_username:start_username+USERNAME_SIZE].decode(encoding='ascii').strip()
-    return username
-
-
-def get_message_payload(message: bytes):
-    """
-    Returns the payload of the message
-    :param message: The received message
-    :return: The payload of the message
-    """
-    start_payload = MESSAGE_TYPE_SIZE + OPERATION_SIZE + SEQ_SIZE + USERNAME_SIZE + PAYLOAD_SIZE
-    payload_size = get_payload_size(message)
-    payload = message[start_payload:start_payload+payload_size].decode(encoding='ascii').strip()
-    return payload
-
-
-def check_header(message: bytes) -> HeaderInfo:
-    """
-    Checks if header is correctly built
-    :param message: The message to check
-    :return: True if header is ok, or False otherwise
-    """
-    header_info = HeaderInfo()
-    if len(message) <= MAX_HEADER_SIZE:
-        header_info.code = ErrorCode.MESSAGE_TOO_SHORT
-        return header_info
-
-    header_info.code = ErrorCode.OK
-    header_info.is_ok = True
-    header_info.user = get_user(message)
-    header_info.type = MessageType.to_message_type(message[0])
-
-    return header_info
-
-
-def build_ack(header_info: HeaderInfo, user) -> bytes:
-    """
-    Builds reply message
-    :param header_info: The previously extracted header information
-    :return: The reply object as a sequence of bytes
-    """
-    error_message_str = "OK"
-    if header_info.code is ErrorCode.MESSAGE_TOO_SHORT:
-        error_message_str = "Message too short"
-    elif header_info.code is ErrorCode.WRONG_PAYLOAD:
-        error_message_str = "Wrong payload"
-    elif header_info.code is ErrorCode.UNKNOWN_MESSAGE:
-        error_message_str = "Unknown type of message"
-
-    message_type = MessageType.CONTROL.to_bytes()
-    operation_type = OperationType.ACK.to_bytes()
-    seq_ack = header_info.seq.to_bytes(1, byteorder='big')
-    username_send = user.ljust(USERNAME_SIZE, ' ').encode(encoding='ascii')
-    error_message = error_message_str.encode(encoding='ascii')
-    payload_size = len(error_message).to_bytes(4, byteorder='big')
-    return b''.join([message_type, operation_type, seq_ack, username_send, payload_size, error_message])
-
-
-def get_username_input():
-    username_ok = False
-    username_input = ''
-    while username_ok is False:
-        print('Please enter your user name: ')
-        username_input = input()
-        if username_input == '':
-            print('Error: user name should be a non-empty string')
-            continue
-        if len(username_input) > 32:
-            print('Error: user name should be a string with maximum length of 32 characters')
-            continue
-        username_ok = True
-    return username_input
-
-
-def handle_message(data, user, host_from, port):
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(('', port))
-
-    header_info = check_header(data)
-    if header_info.type == MessageType.CHAT:
-        payload = get_message_payload(data)
-        print(f'[{header_info.user}]: {payload}')
-        data_send = build_ack(header_info, user)
-        print('Sending ACK...')
-        s.sendto(data_send, host_from)
-        s.close()
-        message_to_send = input_message()
-        reply = send_message(*host_from, user, message_to_send, port)
-    else:
-        s.close()
-
-
-def wait_and_receive(host, port, user):
-    print(f'Waiting for connections on port {port}...')
-    while True:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.bind((host, port))
-
-        data, host_from = s.recvfrom(1024)
-        print('Connected by ', host_from)
-        if not data:
-            continue
-
-        s.close()
-        handle_message(data, user, host_from, port)
-
-
-def send_message(host, port, user, message, local_port) -> string:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.bind(('', local_port))
-        message_type = MessageType.CHAT.to_bytes()
-        operation_type = OperationType.NO_OPERATION.to_bytes()
-        seq_ack = int(0).to_bytes(1, byteorder='big')
-        username_send = user.ljust(USERNAME_SIZE, ' ').encode(encoding='ascii')
-        message_send = message.encode(encoding='ascii')
-        payload_size = len(message_send).to_bytes(4, byteorder='big')
-        data_send = b''.join([message_type, operation_type, seq_ack, username_send, payload_size, message_send])
-        s.sendto(data_send, (host, port))
-        print('Message sent. Waiting for reply...')
-        reply = s.recvfrom(1024)
-        s.close()
-        return reply
+@dataclass
+class ClientDaemonMessage:
+    """Message between client and daemon"""
+    command: int
+    data: str = ""
+    
+    def pack(self) -> bytes:
+        """Pack into bytes"""
+        data_bytes = self.data.encode('ascii')
+        return struct.pack('!BI', self.command, len(data_bytes)) + data_bytes
+    
+    @staticmethod
+    def unpack(data: bytes) -> 'ClientDaemonMessage':
+        """Unpack from bytes"""
+        command, length = struct.unpack('!BI', data[:5])
+        payload = data[5:5+length].decode('ascii')
+        return ClientDaemonMessage(command, payload)
 
 
 def input_message():
