@@ -1,11 +1,11 @@
 # Networking Technologies and Management Systems II  
-### Programming Project (WS 2025/26)
+### Programming Project (WS 2024/25)
 
 ---
 
 ## 🧩 Project Overview
 
-In order to put the concepts learned in the course into practice, the programming project aims at implementing **a simple messaging protocol for chat applications built on top of UDP**.
+In order to put the concepts learned in the course into practice, the programming project aims at implementing **a simple messaging protocol for chat applications built on top of UDP**.  
 
 This protocol — called **Simple IMC Messaging Protocol (SIMP)** — could in theory be used by a third-party to implement a chat program at the application layer level.
 
@@ -13,77 +13,181 @@ This protocol — called **Simple IMC Messaging Protocol (SIMP)** — could in t
 
 ## 📜 SIMP Specification
 
-### 1. Protocol Concept
+### 1. Overview
 
-SIMP is a **lightweight protocol** implemented over UDP.  
-While UDP does not provide reliable delivery, SIMP adds minimal mechanisms to ensure message delivery, using connection setup and acknowledgment logic.
+SIMP represents a **lightweight protocol**.  
+It does not require all the connection-oriented functionalities of TCP. Instead, it runs on top of **UDP** while still ensuring **message delivery**.
 
-Users are identified by **IP address and port number**.  
-Each user must run a SIMP daemon to participate in chats.
+The protocol works as follows:
 
-- A user can **start or receive** a chat request.  
-- If a user is already chatting, new invitations will be **automatically rejected** with an error message (`ERR: user busy`).
-
-Once a chat is accepted, both users can exchange messages until one side closes the connection.
+- Any user may contact another user to start a chat.  
+- Users are identified by their **IP address and port number**.  
+- Each user must have a running **SIMP implementation** (daemon).  
+- A user may **accept or decline** an invitation.  
+- Once accepted, both users can exchange messages until one ends the chat.  
+- If a user is already in a chat, new invitations are automatically **rejected** with an error message:  
+  > “User is busy in another chat”
 
 ---
 
-### 2. Datagram Types
+### 2. Types of Datagrams
 
-| Datagram Type | Description | Type Value |
-|----------------|--------------|-------------|
-| **Control datagram** | Used to establish, terminate, or retransmit data after timeout | `0x01` |
-| **Chat datagram** | Used for the actual chat content between users | `0x02` |
+| Type | Description | Value |
+|------|--------------|--------|
+| **Control datagram** | Used to establish/terminate connections or resend after timeout | `0x01` |
+| **Chat datagram** | Used for actual chat messages | `0x02` |
 
 ---
 
 ### 3. Header Format
 
-Each SIMP datagram consists of a **header** and a **payload**.  
-All text is encoded using **plain ASCII**.
+Each SIMP datagram consists of a **header** and a **payload**.
+
+All text (strings) must be encoded in **plain ASCII**.
 
 | Field | Size | Description |
 |--------|------|-------------|
-| **Type** | 1 byte | `0x01` = control datagram; `0x02` = chat datagram |
-| **Operation** | 1 byte | Depends on Type |
-| **Sequence** | 1 byte | Sequence number (`0x00` or `0x01`) |
+| **Type** | 1 byte | Type of datagram: `0x01` = control, `0x02` = chat |
+| **Operation** | 1 byte | Operation type (see below) |
+| **Sequence** | 1 byte | Sequence number: `0x00` or `0x01` |
 | **User** | 32 bytes | Username (ASCII string) |
 | **Length** | 4 bytes | Payload length in bytes |
-| **Payload** | Variable | Content depending on the type and operation |
+| **Payload** | Variable | Message content or error text |
 
 #### Operation Values
 
-If `Type == 0x01` (Control):
-- `0x01` → `ERR` (error)
-- `0x02` → `SYN` (start connection)
-- `0x04` → `ACK` (acknowledge)
-- `0x08` → `FIN` (close connection)
+If `Type == 0x01` (Control datagram):
 
-If `Type == 0x02` (Chat):
-- `Operation = 0x01`
+| Operation | Meaning |
+|------------|----------|
+| `0x01` | `ERR` — Error condition occurred |
+| `0x02` | `SYN` — Used to initiate connection |
+| `0x04` | `ACK` — Used as acknowledgement |
+| `0x08` | `FIN` — Used to close connection |
+
+If `Type == 0x02` (Chat datagram):
+
+| Operation | Meaning |
+|------------|----------|
+| `0x01` | Chat message |
 
 ---
 
-### 4. Protocol Operation
+### 4. Operation
 
 #### Connection Establishment (Three-way Handshake)
 
-1. **Sender → Receiver:** send `SYN`
-2. **Receiver → Sender:** reply `SYN + ACK` (bitwise OR)
-3. **Sender → Receiver:** reply `ACK`
+1. **Sender → Receiver:** Send `SYN` control datagram  
+2. **Receiver → Sender:** Reply with `SYN + ACK` (bitwise OR)  
+3. **Sender → Receiver:** Reply with `ACK`
 
-If the receiver declines, step 2 is replaced by a `FIN` message.
+If the receiver declines, Step 2 is replaced with a `FIN` datagram.
 
-#### Message Exchange (Stop-and-Wait)
+#### Message Transmission (Stop-and-Wait)
 
 After connection setup:
-- The sender transmits a **chat datagram**.
-- Waits for **ACK** before sending the next datagram.
-- If no ACK is received within 5 seconds → retransmit same datagram (same sequence number).
-- Next message toggles sequence number (`0` ↔ `1`).
+- Sender transmits a datagram and **waits for ACK**
+- If **no ACK** received within **5 seconds**, resend same datagram (same sequence number)
+- Once ACK arrives, send next message (toggle sequence: 0 ↔ 1)
 
-If a user is already chatting and receives a new `SYN`:
-- Send an `ERR` (“User already in another chat”) and a `FIN`.
+If a user already in chat receives another `SYN`:
+- Respond with `ERR: "User already in another chat"` and `FIN`
 
-To end a chat:
-- Send `FIN`; peer replies with `ACK
+To close chat:
+- Send `FIN`
+- Peer responds with `ACK` before disconnecting
+
+---
+
+## ⚙️ Implementation
+
+The SIMP system has **two components**:
+
+### 1. Daemon (`simp_daemon.py`)
+- Runs in the background, listening for incoming connections  
+- Must be started before chat  
+- Communication between daemons uses **UDP port 7777**  
+- Communication between **client and daemon** uses **UDP port 7778**  
+- All SIMP communication happens **daemon-to-daemon**
+
+### 2. Client (`simp_client.py`)
+- Text-based program for end users  
+- Connects to local daemon using its IP as parameter  
+- Prompts for username  
+- Depending on state:
+
+#### Client Logic
+
+1. **If a chat request is pending:**  
+   - Show inviter’s IP and username  
+   - Ask user to **accept or decline**
+
+2. **If no chat request pending:**  
+   - Ask whether to **start a new chat** or **wait for requests**
+   - If starting: prompt for remote user’s IP  
+   - If waiting: enter idle mode until an invitation arrives
+
+3. **Quit option:**  
+   - User may disconnect anytime by pressing **`q`**
+
+---
+
+### Remarks
+
+**Remark 1:**  
+Client and daemon are **separate programs** running independently.  
+You must implement your own internal protocol between them supporting:
+- `connect` — establish client-daemon connection  
+- `chat` — send chat messages  
+- `quit` — disconnect client  
+
+**Remark 2:**  
+The chat is **synchronous** — the sender waits indefinitely for a reply.
+
+---
+
+## 📦 Submission Details
+
+### Deadline
+📅 **19 December 2024, 23:59**
+
+### Submission Format
+Submit via **MS Teams** as a **ZIP file** containing:
+
+#### 1. Python Implementation
+- `simp_daemon.py` — Daemon implementation  
+- `simp_client.py` — Client implementation  
+- `requirements.txt` — List of dependencies (for `pip install -r`)  
+- Any auxiliary modules (e.g. `simp_common.py`)
+
+#### 2. Technical Documentation
+Include concise documentation describing your implementation and design.
+
+---
+
+## 🧮 Assessment (Total: 50 Points)
+
+| Criteria | Points |
+|-----------|--------|
+| Correct message implementation (header + payload) | 15 |
+| Correct three-way handshake | 10 |
+| Correct stop-and-wait | 10 |
+| Correct daemon–client communication | 10 |
+| Clean code & documentation | 5 |
+| **Total** | **50 Points** |
+
+---
+
+## ⚠️ Notes
+
+- UDP ports are fixed:
+  - `7777`: daemon-to-daemon  
+  - `7778`: client-to-daemon  
+- Use **ASCII encoding** for all strings  
+- Ensure modular code organization  
+- Chat operation must strictly follow **stop-and-wait** and **3-way handshake**
+
+---
+
+*Networking Technologies and Management Systems II — WS 2024/25*  
+*Industrial Management and Computing Department*
