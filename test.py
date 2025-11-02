@@ -3,7 +3,7 @@ import socket
 import threading
 import time
 from simp_common import *
-from simp_daemon import SimpDaemon
+from simp_server import SimpDaemon
 
 
 class TestSimpCommon:
