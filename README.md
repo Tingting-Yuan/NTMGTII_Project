@@ -1,5 +1,5 @@
 # Networking Technologies and Management Systems II  
-### Programming Project (WS 2024/25)
+### Programming Project (WS 2025/26)
 
 ---
 
@@ -188,5 +188,5 @@ Include concise documentation describing your implementation and design.
 
 ---
 
-*Networking Technologies and Management Systems II — WS 2024/25*  
+*Networking Technologies and Management Systems II — WS 2025/26*  
 *Industrial Management and Computing Department*
