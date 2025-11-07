@@ -149,10 +149,7 @@ The chat is **synchronous** — the sender waits indefinitely for a reply.
 ## 📦 Submission Details
 
 ### Deadline
-📅 **19 December 2024, 23:59**
-
-### Submission Format
-Submit via **MS Teams** as a **ZIP file** containing:
+📅 **19 December 2025, 23:59**
 
 #### 1. Python Implementation
 - `simp_daemon.py` — Daemon implementation  
