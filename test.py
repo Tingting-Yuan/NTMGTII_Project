@@ -9,21 +9,20 @@ from simp_common import (MessageType, build_simp_message, parse_simp_message,
 
 DAEMON_ADDR = ("127.0.0.1", DAEMON_PORT)
 
-# Pytest fixture for daemon lifecycle
-@pytest.fixture(scope="module")
-def daemon():
-    """Start daemon before tests, stop after all tests complete."""
-    print("\n[INFO] Starting simp_daemon.py ...")
-    proc = subprocess.Popen([sys.executable, "simp_daemon.py"], 
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    time.sleep(2)  # give daemon time to start and bind ports
-    yield proc
-    print("\n[INFO] Stopping daemon...")
-    proc.terminate()
-    try:
-        proc.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+def start_daemon():
+    print("[INFO] Starting simp_daemon.py ...")
+    proc = subprocess.Popen([sys.executable, "simp_daemon.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    time.sleep(1)  # give daemon time to start
+    return proc
+
+def start_client(username="testuser"):
+    print("[INFO] Starting simp_client.py ...")
+    proc = subprocess.Popen([sys.executable, "simp_client.py"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    time.sleep(1)
+    # send username to client stdin
+    proc.stdin.write(f"{username}\n")
+    proc.stdin.flush()
+    return proc
 
 def test_message_build_parse():
     """Test message building and parsing (no daemon needed)."""
@@ -36,7 +35,7 @@ def test_message_build_parse():
     assert parsed["payload"] == "payload", "Payload mismatch"
     print("PASS: Message header + payload")
 
-def test_three_way_handshake(daemon):
+def test_three_way_handshake():
     """Test three-way handshake: SYN -> SYN+ACK -> ACK."""
     print("\n[TEST] Three-way handshake: SYN -> SYN+ACK -> ACK")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -70,7 +69,7 @@ def test_three_way_handshake(daemon):
             pass
         sock.close()
 
-def test_stop_and_wait(daemon):
+def test_stop_and_wait():
     """Test stop-and-wait ARQ with chat messages."""
     print("\n[TEST] Stop-and-wait message")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -124,7 +123,7 @@ def test_stop_and_wait(daemon):
             pass
         sock.close()
 
-def test_daemon_client_communication(daemon):
+def test_daemon_client_communication():
     """Test client-daemon internal protocol."""
     print("\n[TEST] Daemon-client communication")
     
@@ -152,6 +151,53 @@ def test_daemon_client_communication(daemon):
     finally:
         test_sock.close()
 
+# Pytest fixture for daemon lifecycle
+@pytest.fixture(scope="module")
+def daemon():
+    """Start daemon before tests, stop after all tests complete."""
+    print("\n[INFO] Starting simp_daemon.py ...")
+    proc = subprocess.Popen([sys.executable, "simp_daemon.py"], 
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    time.sleep(2)  # give daemon more time to start and bind ports
+    yield proc
+    print("\n[INFO] Stopping daemon...")
+    proc.terminate()
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+# Wrapper tests that use the fixture
+def test_message_build_parse_with_daemon(daemon):
+    test_message_build_parse()
+
+def test_three_way_handshake_with_daemon(daemon):
+    test_three_way_handshake()
+
+def test_stop_and_wait_with_daemon(daemon):
+    test_stop_and_wait()
+
+def test_daemon_client_communication_with_daemon(daemon):
+    test_daemon_client_communication()
+
 if __name__ == "__main__":
-    # Allow running directly with python (will use pytest)
-    pytest.main([__file__, "-v", "-s"])
+    daemon_proc = start_daemon()
+    try:
+        results = [
+            test_message_build_parse(),
+            test_three_way_handshake(),
+            test_stop_and_wait(),
+            test_daemon_client_communication()
+        ]
+        print("\n============== SUMMARY ==============")
+        if all(results):
+            print("ALL TESTS PASSED")
+        else:
+            print("SOME TESTS FAILED")
+            for i, result in enumerate(results, 1):
+                status = "✓ PASS" if result else "✗ FAIL"
+                print(f"  Test {i}: {status}")
+    finally:
+        print("\n[INFO] Stopping daemon...")
+        daemon_proc.terminate()
+        daemon_proc.wait(timeout=2)
