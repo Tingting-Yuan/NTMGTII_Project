@@ -46,6 +46,7 @@ def build_simp_message(msg_type: MessageType, operation: int, seq: int, username
     return type_byte + op_byte + seq_byte + username_bytes + payload_len + payload_bytes
 
 
+
 def parse_simp_message(data: bytes) -> dict:
     """Parse a SIMP protocol message."""
     if len(data) < HEADER_SIZE:
@@ -67,6 +68,7 @@ def parse_simp_message(data: bytes) -> dict:
         'operation': operation,
         'seq': seq,
         'username': username,
+        'length': payload_len,
         'payload': payload
     }
 
