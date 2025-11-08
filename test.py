@@ -2,6 +2,7 @@ import subprocess
 import time
 import socket
 import sys
+import pytest
 from simp_common import MessageType, build_simp_message, parse_simp_message, DAEMON_PORT, CLIENT_DAEMON_PORT, TIMEOUT, Test_PORT, build_client_daemon_message, parse_client_daemon_message
 
 DAEMON_ADDR = ("127.0.0.1", DAEMON_PORT)
@@ -16,11 +17,11 @@ def test_message_build_parse():
     print("\n[TEST] Message build + parse")
     msg = build_simp_message(MessageType.CONTROL, 0x02, 0, "alice", "payload")
     parsed = parse_simp_message(msg)
-    if parsed["type"] == MessageType.CONTROL.value and parsed["username"].strip() == "alice" and parsed["payload"] == "payload":
-        print("PASS: Message header + payload")
-        return True
-    print("FAIL: Message build/parse")
-    return False
+    
+    assert parsed["type"] == MessageType.CONTROL.value, "Message type mismatch"
+    assert parsed["username"].strip() == "alice", "Username mismatch"
+    assert parsed["payload"] == "payload", "Payload mismatch"
+    print("PASS: Message header + payload")
 
 def test_three_way_handshake():
     print("\n[TEST] Three-way handshake: SYN -> SYN+ACK -> ACK")
@@ -34,19 +35,17 @@ def test_three_way_handshake():
 
         data, _ = sock.recvfrom(4096)
         parsed = parse_simp_message(data)
-        if parsed["operation"] == (0x02 | 0x04):
-            print("PASS: SYN+ACK received")
-            # send final ACK
-            ack_msg = build_simp_message(MessageType.CONTROL, 0x04, 0, "alice")
-            sock.sendto(ack_msg, DAEMON_ADDR)
-            time.sleep(0.5)  # give daemon time to process
-            return True
-        else:
-            print("FAIL: Wrong response:", parsed)
-            return False
+        
+        assert parsed["operation"] == (0x02 | 0x04), f"Expected SYN+ACK (0x06), got {parsed['operation']}"
+        print("PASS: SYN+ACK received")
+        
+        # send final ACK
+        ack_msg = build_simp_message(MessageType.CONTROL, 0x04, 0, "alice")
+        sock.sendto(ack_msg, DAEMON_ADDR)
+        time.sleep(0.5)  # give daemon time to process
+        
     except socket.timeout:
-        print("FAIL: No SYN+ACK from daemon")
-        return False
+        pytest.fail("No SYN+ACK received from daemon (timeout)")
     finally:
         sock.close()
 
@@ -63,16 +62,15 @@ def test_stop_and_wait():
         sock.sendto(syn_msg, DAEMON_ADDR)
         data, _ = sock.recvfrom(4096)
         parsed = parse_simp_message(data)
-        if parsed["operation"] != (0x02 | 0x04):
-            print("FAIL: Could not establish connection")
-            return False
+        
+        assert parsed["operation"] == (0x02 | 0x04), "Could not establish connection - no SYN+ACK"
+        
         # Send ACK to complete handshake
         ack_msg = build_simp_message(MessageType.CONTROL, 0x04, 0, "bob")
         sock.sendto(ack_msg, DAEMON_ADDR)
         time.sleep(0.5)
     except socket.timeout:
-        print("FAIL: Could not establish connection")
-        return False
+        pytest.fail("Could not establish connection - timeout")
     
     # Now test stop-and-wait with chat messages
     try:
@@ -81,15 +79,15 @@ def test_stop_and_wait():
             sock.sendto(msg, DAEMON_ADDR)
             data, _ = sock.recvfrom(4096)
             parsed = parse_simp_message(data)
-            if parsed["operation"] != 0x04 or parsed["seq"] != seq:
-                print(f"FAIL: Wrong ACK for seq={seq}")
-                return False
+            
+            assert parsed["operation"] == 0x04, f"Expected ACK (0x04), got {parsed['operation']}"
+            assert parsed["seq"] == seq, f"Expected seq={seq}, got seq={parsed['seq']}"
+            
             print(f"PASS: Message {i} acknowledged with seq={seq}")
             seq = 1 - seq
-        return True
+            
     except socket.timeout:
-        print(f"FAIL: No ACK for seq={seq}")
-        return False
+        pytest.fail(f"No ACK received for seq={seq}")
     finally:
         # Send FIN to cleanup
         fin_msg = build_simp_message(MessageType.CONTROL, 0x08, 0, "bob")
@@ -113,40 +111,35 @@ def test_daemon_client_communication():
         data, _ = test_sock.recvfrom(4096)
         response = parse_client_daemon_message(data.decode('ascii'))
         
-        if response['command'] == 'ok':
-            print("PASS: Client connected to daemon successfully")
-            return True
-        else:
-            print(f"FAIL: Unexpected response: {response}")
-            return False
+        assert response['command'] == 'ok', f"Expected 'ok', got '{response['command']}'"
+        print("PASS: Client connected to daemon successfully")
             
     except socket.timeout:
-        print("FAIL: No response from daemon")
-        return False
+        pytest.fail("No response from daemon (timeout)")
     except Exception as e:
-        print(f"FAIL: Error during test: {e}")
-        return False
+        pytest.fail(f"Error during test: {e}")
     finally:
         test_sock.close()
 
-if __name__ == "__main__":
+# Pytest fixture for daemon lifecycle
+@pytest.fixture(scope="module")
+def daemon():
+    """Start daemon before tests, stop after all tests complete."""
     daemon_proc = start_daemon()
-    try:
-        results = [
-            test_message_build_parse(),
-            test_three_way_handshake(),
-            test_stop_and_wait(),
-            test_daemon_client_communication()
-        ]
-        print("\n============== SUMMARY ==============")
-        if all(results):
-            print("ALL TESTS PASSED")
-        else:
-            print("SOME TESTS FAILED")
-            for i, result in enumerate(results, 1):
-                status = "✓ PASS" if result else "✗ FAIL"
-                print(f"  Test {i}: {status}")
-    finally:
-        print("\n[INFO] Stopping daemon...")
-        daemon_proc.terminate()
-        daemon_proc.wait(timeout=2)
+    yield daemon_proc
+    print("\n[INFO] Stopping daemon...")
+    daemon_proc.terminate()
+    daemon_proc.wait(timeout=2)
+
+# Redefine tests to use the fixture
+def test_message_build_parse_with_daemon(daemon):
+    test_message_build_parse()
+
+def test_three_way_handshake_with_daemon(daemon):
+    test_three_way_handshake()
+
+def test_stop_and_wait_with_daemon(daemon):
+    test_stop_and_wait()
+
+def test_daemon_client_communication_with_daemon(daemon):
+    test_daemon_client_communication()
