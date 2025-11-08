@@ -1,184 +1,152 @@
-import pytest
-from simp_common import *
-from simp_daemon import SimpDaemon
+import subprocess
+import time
+import socket
+import sys
+from simp_common import MessageType, build_simp_message, parse_simp_message, DAEMON_PORT, CLIENT_DAEMON_PORT, TIMEOUT, Test_PORT, build_client_daemon_message, parse_client_daemon_message
 
+DAEMON_ADDR = ("127.0.0.1", DAEMON_PORT)
 
-#############################
-#   1. Message Format Tests
-#############################
+def start_daemon():
+    print("[INFO] Starting simp_daemon.py ...")
+    proc = subprocess.Popen([sys.executable, "simp_daemon.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    time.sleep(2)  # give daemon more time to start and bind ports
+    return proc
 
-class TestMessageFormat:
-    def test_header_fields(self):
-        msg = build_simp_message(
-            MessageType.CONTROL,
-            OperationType.SYN.value,
-            1,
-            "alice",
-            "Hallo, welcome to IMC simp!"
-        )
-        parsed = parse_simp_message(msg)
-        assert parsed["type"] == MessageType.CONTROL.value
-        assert parsed["operation"] == OperationType.SYN.value
-        assert parsed["seq"] == 1
-        assert parsed["username"] == "alice"
-        assert parsed["length"] == len("Hallo, welcome to IMC simp!")
-        assert parsed["payload"] == "Hallo, welcome to IMC simp!"
+def test_message_build_parse():
+    print("\n[TEST] Message build + parse")
+    msg = build_simp_message(MessageType.CONTROL, 0x02, 0, "alice", "payload")
+    parsed = parse_simp_message(msg)
+    if parsed["type"] == MessageType.CONTROL.value and parsed["username"].strip() == "alice" and parsed["payload"] == "payload":
+        print("PASS: Message header + payload")
+        return True
+    print("FAIL: Message build/parse")
+    return False
 
-    def test_chat_message_op(self):
-        msg = build_simp_message(
-            MessageType.CHAT,
-            OperationType.CHAT_MSG.value,
-            0,
-            "Bob",
-            "Hallo!"
-        )
-        parsed = parse_simp_message(msg)
-        assert parsed["type"] == MessageType.CHAT.value
-        assert parsed["operation"] == OperationType.CHAT_MSG.value
+def test_three_way_handshake():
+    print("\n[TEST] Three-way handshake: SYN -> SYN+ACK -> ACK")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('', 0))  # bind to random available port
+    sock.settimeout(TIMEOUT)
+    try:
+        # send SYN
+        syn_msg = build_simp_message(MessageType.CONTROL, 0x02, 0, "alice")
+        sock.sendto(syn_msg, DAEMON_ADDR)
 
+        data, _ = sock.recvfrom(4096)
+        parsed = parse_simp_message(data)
+        if parsed["operation"] == (0x02 | 0x04):
+            print("PASS: SYN+ACK received")
+            # send final ACK
+            ack_msg = build_simp_message(MessageType.CONTROL, 0x04, 0, "alice")
+            sock.sendto(ack_msg, DAEMON_ADDR)
+            time.sleep(0.5)  # give daemon time to process
+            return True
+        else:
+            print("FAIL: Wrong response:", parsed)
+            return False
+    except socket.timeout:
+        print("FAIL: No SYN+ACK from daemon")
+        return False
+    finally:
+        sock.close()
 
-#############################
-#   2. Control Operations
-#############################
-
-class TestControlOps:
-    def test_syn(self):
-        msg = build_simp_message(
-            MessageType.CONTROL,
-            OperationType.SYN.value,
-            0,
-            "a",
-            ""
-        )
-        assert parse_simp_message(msg)["operation"] == OperationType.SYN.value
-
-    def test_syn_ack(self):
-        op = OperationType.SYN.value | OperationType.ACK.value
-        msg = build_simp_message(
-            MessageType.CONTROL,
-            op,
-            0,
-            "daemon",
-            ""
-        )
-        assert parse_simp_message(msg)["operation"] == op
-
-    def test_fin(self):
-        msg = build_simp_message(
-            MessageType.CONTROL,
-            OperationType.FIN.value,
-            1,
-            "x",
-            ""
-        )
-        assert parse_simp_message(msg)["operation"] == OperationType.FIN.value
-
-
-#############################
-#   3. Three-way Handshake
-#############################
-
-class TestHandshake:
-    def test_three_way(self):
-        syn = build_simp_message(
-            MessageType.CONTROL, OperationType.SYN.value, 0, "u", ""
-        )
-        parsed_syn = parse_simp_message(syn)
-        assert parsed_syn["operation"] == OperationType.SYN.value
-
-        syn_ack = build_simp_message(
-            MessageType.CONTROL,
-            OperationType.SYN.value | OperationType.ACK.value,
-            0,
-            "server",
-            ""
-        )
-        parsed_syn_ack = parse_simp_message(syn_ack)
-        assert parsed_syn_ack["operation"] == (OperationType.SYN.value | OperationType.ACK.value)
-
-        ack = build_simp_message(
-            MessageType.CONTROL, OperationType.ACK.value, 1, "u", ""
-        )
-        parsed_ack = parse_simp_message(ack)
-        assert parsed_ack["operation"] == OperationType.ACK.value
-
-
-#############################
-#   4. Stop-and-Wait
-#############################
-
-class TestStopAndWait:
-    def test_seq_toggle(self):
-        seq = 0
-        for _ in range(10):
+def test_stop_and_wait():
+    print("\n[TEST] Stop-and-wait message")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('', 0))
+    sock.settimeout(TIMEOUT)
+    seq = 0
+    
+    # First establish connection
+    try:
+        syn_msg = build_simp_message(MessageType.CONTROL, 0x02, 0, "bob")
+        sock.sendto(syn_msg, DAEMON_ADDR)
+        data, _ = sock.recvfrom(4096)
+        parsed = parse_simp_message(data)
+        if parsed["operation"] != (0x02 | 0x04):
+            print("FAIL: Could not establish connection")
+            return False
+        # Send ACK to complete handshake
+        ack_msg = build_simp_message(MessageType.CONTROL, 0x04, 0, "bob")
+        sock.sendto(ack_msg, DAEMON_ADDR)
+        time.sleep(0.5)
+    except socket.timeout:
+        print("FAIL: Could not establish connection")
+        return False
+    
+    # Now test stop-and-wait with chat messages
+    try:
+        for i in range(2):
+            msg = build_simp_message(MessageType.CHAT, 0x01, seq, "bob", f"msg{i}")
+            sock.sendto(msg, DAEMON_ADDR)
+            data, _ = sock.recvfrom(4096)
+            parsed = parse_simp_message(data)
+            if parsed["operation"] != 0x04 or parsed["seq"] != seq:
+                print(f"FAIL: Wrong ACK for seq={seq}")
+                return False
+            print(f"PASS: Message {i} acknowledged with seq={seq}")
             seq = 1 - seq
-        assert seq in (0, 1)
+        return True
+    except socket.timeout:
+        print(f"FAIL: No ACK for seq={seq}")
+        return False
+    finally:
+        # Send FIN to cleanup
+        fin_msg = build_simp_message(MessageType.CONTROL, 0x08, 0, "bob")
+        sock.sendto(fin_msg, DAEMON_ADDR)
+        sock.close()
 
-    def test_message_ack_pair(self):
-        msg = build_simp_message(
-            MessageType.CHAT, OperationType.CHAT_MSG.value, 0, "alice", "hi"
-        )
-        ack = build_simp_message(
-            MessageType.CONTROL, OperationType.ACK.value, 0, "server", ""
-        )
-        assert parse_simp_message(msg)["seq"] == parse_simp_message(ack)["seq"]
-
-
-#############################
-#   5. Busy User Error Case
-#############################
-
-class TestBusyUser:
-    def test_busy_err_fin(self):
-        err = build_simp_message(
-            MessageType.CONTROL,
-            OperationType.ERR.value,
-            0,
-            "daemon",
-            "User is busy in another chat"
-        )
-        fin = build_simp_message(
-            MessageType.CONTROL,
-            OperationType.FIN.value,
-            0,
-            "daemon",
-            ""
-        )
-
-        p_err = parse_simp_message(err)
-        p_fin = parse_simp_message(fin)
-
-        assert p_err["operation"] == OperationType.ERR.value
-        assert "busy" in p_err["payload"].lower()
-        assert p_fin["operation"] == OperationType.FIN.value
-
-
-#############################
-#   6. Daemon-client protocol
-#############################
-
-class TestDaemonClientProtocol:
-    def test_client_connect(self):
-        msg = build_client_daemon_message("connect", username="alice")
-        parsed = parse_client_daemon_message(msg)
-        assert parsed["command"] == "connect"
-        assert parsed["username"] == "alice"
-
-    def test_client_chat(self):
-        msg = build_client_daemon_message("chat", text="hello")
-        parsed = parse_client_daemon_message(msg)
-        assert parsed["command"] == "chat"
-        assert parsed["text"] == "hello"
-
-    def test_client_quit(self):
-        msg = build_client_daemon_message("quit")
-        parsed = parse_client_daemon_message(msg)
-        assert parsed["command"] == "quit"
-
-
-#########################################
-# Run with python test.py
-#########################################
+def test_daemon_client_communication():
+    print("\n[TEST] Daemon-client communication")
+    
+    # Create a direct socket to test client-daemon protocol
+    test_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    test_sock.bind(('', 0))  # bind to random port
+    test_sock.settimeout(TIMEOUT)
+    
+    try:
+        # Send connect message to daemon
+        connect_msg = build_client_daemon_message('connect', username='tester')
+        test_sock.sendto(connect_msg.encode('ascii'), ("127.0.0.1", CLIENT_DAEMON_PORT))
+        
+        # Wait for OK response
+        data, _ = test_sock.recvfrom(4096)
+        response = parse_client_daemon_message(data.decode('ascii'))
+        
+        if response['command'] == 'ok':
+            print("PASS: Client connected to daemon successfully")
+            return True
+        else:
+            print(f"FAIL: Unexpected response: {response}")
+            return False
+            
+    except socket.timeout:
+        print("FAIL: No response from daemon")
+        return False
+    except Exception as e:
+        print(f"FAIL: Error during test: {e}")
+        return False
+    finally:
+        test_sock.close()
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--tb=short"])
+    daemon_proc = start_daemon()
+    try:
+        results = [
+            test_message_build_parse(),
+            test_three_way_handshake(),
+            test_stop_and_wait(),
+            test_daemon_client_communication()
+        ]
+        print("\n============== SUMMARY ==============")
+        if all(results):
+            print("ALL TESTS PASSED")
+        else:
+            print("SOME TESTS FAILED")
+            for i, result in enumerate(results, 1):
+                status = "✓ PASS" if result else "✗ FAIL"
+                print(f"  Test {i}: {status}")
+    finally:
+        print("\n[INFO] Stopping daemon...")
+        daemon_proc.terminate()
+        daemon_proc.wait(timeout=2)
