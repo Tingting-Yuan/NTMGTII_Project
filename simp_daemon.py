@@ -22,9 +22,8 @@ class SimpDaemon:
         self.daemon_socket.bind((self.host, DAEMON_PORT))
         self.client_daemon_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.client_daemon_socket.bind((self.host, CLIENT_DAEMON_PORT))
-        # self.client_daemon_socket2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # self.client_daemon_socket2.bind((self.host, Test_PORT))
         self.running = True
+        self.auto_accept = False  # For testing: auto-accept invitations
 
     def start(self):
         """Start the daemon with both listeners."""
@@ -103,13 +102,14 @@ class SimpDaemon:
             )
             self.daemon_socket.sendto(fin_msg, addr)
         else:
-            # Store invitation for client to accept/decline
+            # Store invitation
             self.pending_invitation = {
                 'addr': addr,
                 'username': msg['username'],
                 'seq': msg['seq']
             }
-            # Notify client
+            
+            # Notify client if connected
             if self.client_socket:
                 notification = build_client_daemon_message(
                     'invitation',
@@ -117,6 +117,18 @@ class SimpDaemon:
                     ip=addr[0]
                 )
                 self.client_daemon_socket.sendto(notification.encode('ascii'), self.client_socket)
+            
+            # For testing: if no client is connected, auto-accept
+            # This allows testing the protocol without a full client
+            if not self.client_socket or self.auto_accept:
+                print(f"Auto-accepting invitation from {msg['username']} at {addr}")
+                syn_ack_msg = build_simp_message(
+                    MessageType.CONTROL,
+                    OperationType.SYN.value | OperationType.ACK.value,
+                    msg['seq'],
+                    self.username or "daemon"
+                )
+                self.daemon_socket.sendto(syn_ack_msg, addr)
 
     def handle_syn_ack(self, msg: dict, addr: tuple):
         """Handle SYN-ACK (connection accepted)."""
@@ -125,7 +137,7 @@ class SimpDaemon:
             MessageType.CONTROL,
             OperationType.ACK.value,
             msg['seq'],
-            self.username
+            self.username or "daemon"
         )
         self.daemon_socket.sendto(ack_msg, addr)
         
@@ -203,7 +215,7 @@ class SimpDaemon:
                 MessageType.CONTROL,
                 OperationType.ACK.value,
                 msg['seq'],
-                self.username
+                self.username or "daemon"
             )
             self.daemon_socket.sendto(ack_msg, addr)
             
@@ -259,7 +271,7 @@ class SimpDaemon:
             MessageType.CONTROL,
             OperationType.SYN.value,
             0,
-            self.username
+            self.username or "daemon"
         )
         self.daemon_socket.sendto(syn_msg, (target_ip, target_port))
 
@@ -273,7 +285,7 @@ class SimpDaemon:
             MessageType.CONTROL,
             OperationType.SYN.value | OperationType.ACK.value,
             inv['seq'],
-            self.username
+            self.username or "daemon"
         )
         self.daemon_socket.sendto(syn_ack_msg, inv['addr'])
 
@@ -287,7 +299,7 @@ class SimpDaemon:
             MessageType.CONTROL,
             OperationType.FIN.value,
             inv['seq'],
-            self.username
+            self.username or "daemon"
         )
         self.daemon_socket.sendto(fin_msg, inv['addr'])
         self.pending_invitation = None
@@ -301,7 +313,7 @@ class SimpDaemon:
             MessageType.CHAT,
             OperationType.CHAT_MSG.value,
             self.seq_num,
-            self.username,
+            self.username or "daemon",
             text
         )
         
@@ -331,7 +343,7 @@ class SimpDaemon:
             MessageType.CONTROL,
             OperationType.FIN.value,
             0,
-            self.username
+            self.username or "daemon"
         )
         self.daemon_socket.sendto(fin_msg, self.chat_partner)
         
