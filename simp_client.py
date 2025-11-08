@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 
-iimport socket
+import socket
 import sys
 import threading
 from simp_common import *
+
 
 
 class SimpClient:

@@ -22,6 +22,8 @@ class SimpDaemon:
         self.daemon_socket.bind((self.host, DAEMON_PORT))
         self.client_daemon_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.client_daemon_socket.bind((self.host, CLIENT_DAEMON_PORT))
+        # self.client_daemon_socket2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # self.client_daemon_socket2.bind((self.host, Test_PORT))
         self.running = True
 
     def start(self):
