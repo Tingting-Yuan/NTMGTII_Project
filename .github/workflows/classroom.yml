@@ -35,4 +35,4 @@ jobs:
       - name: Run pytest
         run: |
           echo "Running tests on branch: ${{ github.ref_name }}"
-          pytest -v end_test.py
+          pytest -v test.py
