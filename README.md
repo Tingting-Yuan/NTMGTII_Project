@@ -170,7 +170,7 @@ Include concise documentation describing your implementation and design.
 | Correct three-way handshake | 10 |
 | Correct stop-and-wait | 5 |
 | Correct daemon–client communication | 10 |
-| A clear and well-structured report | 10 |
+| A clear and well-structured report (show running results)| 10 |
 | **Total** | **40 Points** |
 
 ---
