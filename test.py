@@ -116,30 +116,42 @@ def test_stop_and_wait(daemon):
 #    - sends "quit" after user types q
 # ----------------------------------------------------------
 def test_client_connect_and_quit(daemon):
+    # 我们监听一个随机端口，不再使用 7779
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("127.0.0.1", CLIENT_DAEMON_PORT))
+    sock.bind(("", 0))
     sock.settimeout(TIMEOUT)
 
-    # Start client
-    client = start_client("alice")
+    listening_port = sock.getsockname()[1]
 
-    # Expect "connect"
+    # 启动 client，并让其知道要把消息发到我们监听的端口
+    client = subprocess.Popen(
+        [sys.executable, "simp_client.py", str(listening_port)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    time.sleep(0.5)
+    client.stdin.write("alice\n")
+    client.stdin.flush()
+
+    # 接收 connect
     data, addr = sock.recvfrom(4096)
     msg = parse_client_daemon_message(data.decode())
     assert msg["command"] == "connect"
 
-    # Respond OK
+    # 发送 ok
     sock.sendto(build_client_daemon_message("ok").encode(), addr)
 
-    # tell client to quit
+    # 输入 q
     client.stdin.write("q\n")
     client.stdin.flush()
 
-    # Expect "quit"
+    # 接收 quit
     data, _ = sock.recvfrom(4096)
     msg2 = parse_client_daemon_message(data.decode())
     assert msg2["command"] == "quit"
 
     client.terminate()
     client.wait(timeout=1)
-    sock.close()
