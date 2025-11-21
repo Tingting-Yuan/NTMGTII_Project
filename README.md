@@ -149,7 +149,7 @@ The chat is **synchronous** — the sender waits indefinitely for a reply.
 ## 📦 Submission Details
 
 ### Deadline
-📅 **19 December 2025, 23:59**
+📅 **15 Jan 2025, 23:59**
 
 #### 1. Python Implementation
 - `simp_daemon.py` — Daemon implementation  
@@ -162,14 +162,15 @@ Include concise documentation describing your implementation and design.
 
 ---
 
-## 🧮 Assessment (Total: 50 Points)
+## 🧮 Assessment (Total: 40 Points)
 
 | Criteria | Points |
 |-----------|--------|
-| Correct message implementation (header + payload) | 10 |
+| Correct message implementation (header + payload) | 5 |
 | Correct three-way handshake | 10 |
-| Correct stop-and-wait | 10 |
+| Correct stop-and-wait | 5 |
 | Correct daemon–client communication | 10 |
+| A clear and well-structured report | 10 |
 | **Total** | **40 Points** |
 
 ---
