@@ -101,6 +101,9 @@ def run_client_action_test(client_proc, expected_command, input_sequence, temp_s
 # === DAEMON PROTOCOL TESTS ===
 # =========================================================================
 
+# ----------------------------------------------------------
+# 1. Test Message Build + Parse
+# ----------------------------------------------------------
 def test_message_build_parse_no_daemon():
     """Test message building and parsing (no daemon needed)."""
     print("\n[TEST] Message build + parse")
@@ -112,6 +115,9 @@ def test_message_build_parse_no_daemon():
     assert parsed["payload"] == "payload", "Payload mismatch"
     print("PASS: Message header + payload")
 
+# ----------------------------------------------------------
+# 2. Three-way handshake
+# ----------------------------------------------------------
 def test_three_way_handshake_with_daemon(daemon):
     """Test three-way handshake: SYN -> SYN+ACK -> ACK. (Requires daemon)"""
     print("\n[TEST] Three-way handshake: SYN -> SYN+ACK -> ACK")
@@ -147,6 +153,9 @@ def test_three_way_handshake_with_daemon(daemon):
             pass
         sock.close()
 
+# ----------------------------------------------------------
+# 3. Stop-and-wait
+# ----------------------------------------------------------
 def test_stop_and_wait_with_daemon(daemon):
     """Test stop-and-wait ARQ with chat messages. (Requires daemon)"""
     print("\n[TEST] Stop-and-wait message")
@@ -194,6 +203,9 @@ def test_stop_and_wait_with_daemon(daemon):
             pass
         sock.close()
 
+# ----------------------------------------------------------
+# 4. Correct daemon–client communication
+# ----------------------------------------------------------
 def test_daemon_client_communication_with_daemon(daemon):
     """Test the daemon's response to the initial 'connect' command. (Requires daemon)"""
     print("\n[TEST] Daemon-client communication (Connect command)")
